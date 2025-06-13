@@ -1,11 +1,287 @@
 [
     {
-        "id": "23cfe505ff3afdc7",
-        "type": "tab",
-        "label": "Flow 1",
-        "disabled": false,
-        "info": "",
-        "env": []
+        "id": "d44f56d2e55419d9",
+        "type": "mqtt in",
+        "z": "23cfe505ff3afdc7",
+        "name": "Dad's location",
+        "topic": "owntracks/dad/Dad",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "d9907598e0a47dc3",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 130,
+        "y": 240,
+        "wires": [
+            [
+                "ec033dccfcf7d510"
+            ]
+        ]
+    },
+    {
+        "id": "ec033dccfcf7d510",
+        "type": "delay",
+        "z": "23cfe505ff3afdc7",
+        "name": "",
+        "pauseType": "rate",
+        "timeout": "60",
+        "timeoutUnits": "seconds",
+        "rate": "1",
+        "nbRateUnits": "1",
+        "rateUnits": "minute",
+        "randomFirst": "1",
+        "randomLast": "5",
+        "randomUnits": "seconds",
+        "drop": true,
+        "allowrate": false,
+        "outputs": 1,
+        "x": 340,
+        "y": 240,
+        "wires": [
+            [
+                "8f3cbe1a69d2fd63"
+            ]
+        ]
+    },
+    {
+        "id": "8f3cbe1a69d2fd63",
+        "type": "function",
+        "z": "23cfe505ff3afdc7",
+        "name": "Calculate Closest Triangle",
+        "func": "// Get the triangle data stored in flow context\nconst triangleData = flow.get(\"triangleData\");\n\n// --- Basic Checks ---\n// Check if triangle data has been loaded and is valid\nif (!triangleData || !Array.isArray(triangleData) || triangleData.length === 0) {\n    node.error(\"Triangle data (flow.triangleData) not found or is empty. Cannot calculate.\", msg);\n    return null; // Stop processing this message\n}\n\n// Check if payload exists and has lat/lon (OwnTracks format)\nif (!msg.payload || msg.payload._type !== 'location' || typeof msg.payload.lat === 'undefined' || typeof msg.payload.lon === 'undefined') {\n    // node.warn(\"Received non-location message or missing lat/lon. Skipping.\", msg); // Uncomment for debugging\n    return null; // Stop processing this message\n}\n\n// --- Extract Incoming Location Data ---\nconst incomingLat = msg.payload.lat;\nconst incomingLon = msg.payload.lon;\n\n// --- Identify User (person_id) and convert to lowercase ---\nlet person_id = \"unknown\"; // Default value\nif (msg.topic && typeof msg.topic === 'string') {\n    const topicParts = msg.topic.split('/');\n    // Assumes topic is like \"owntracks/dad/Dad\" or \"somegroup/dad/device\"\n    // We want the part that is 'dad', 'mum', 'son' which appears to be topicParts[1]\n    if (topicParts.length >= 2) {\n        person_id = topicParts[1].toLowerCase();\n    } else {\n        node.warn(\"Received message with unexpected topic structure for person_id: \" + msg.topic);\n        return null; // Stop processing if topic structure is not as expected\n    }\n} else {\n    node.warn(\"Received message without a valid topic string. Cannot determine person_id.\");\n    return null; // Stop processing if no topic string\n}\n\n// node.log(`Processing location for ${person_id}: Lat ${incomingLat}, Lon ${incomingLon}`); // Uncomment for debugging\n\nlet closestTriangle = null;\nlet minDistance = Infinity;\n\n// --- Main Calculation Loop ---\ntriangleData.forEach(triangle => {\n    // This code assumes each 'triangle' object in your JSON file\n    // has a 'centre' array which contains [latitude, longitude],\n    // and an 'leds' property which is an array of numbers.\n    // Example: { \"name\": \"T1\", \"centre\": [51.7, -1.8], \"leds\": [0, 1] }\n    let centerLat = triangle.centre[0];\n    let centerLon = triangle.centre[1];\n\n    // Check if center coordinates are valid numbers before calculating\n    if (typeof centerLat === 'number' && typeof centerLon === 'number') {\n        // Calculate distance from phone's location to this triangle's center\n        let distance = calculateHaversine(incomingLat, incomingLon, centerLat, centerLon);\n\n        // If this distance is smaller than the smallest found so far...\n        if (distance < minDistance) {\n            // ...update the minimum distance and remember this triangle\n            minDistance = distance;\n            closestTriangle = triangle; // Store the whole triangle object for later use\n        }\n    } else {\n        // Log a warning if a triangle in your data has bad coordinates\n        node.warn(`Invalid or missing center coordinates for triangle: ${triangle.name || 'Unnamed'}`);\n    }\n});\n// -----------------------------\n\n// --- Prepare the Single Output Message ---\nif (closestTriangle) {\n    // node.log(`Closest triangle found: ${closestTriangle.name} for ${person_id}`); // Uncomment for debugging\n\n    // Ensure the 'leds' property exists and is an array in the closest triangle\n    if (closestTriangle.leds && Array.isArray(closestTriangle.leds)) {\n        // Construct the desired output message payload\n        msg.payload = {\n            person_id: person_id, // Lowercase e.g., \"dad\"\n            leds: closestTriangle.leds, // Array of LED numbers\n            name: closestTriangle.name\n        };\n        return msg; // Send the single output message\n    } else {\n        node.warn(`Closest triangle (${closestTriangle.name}) found for ${person_id} but it has invalid or missing 'leds' property.`);\n        return null; // Don't send a message if LEDs are missing/invalid\n    }\n} else {\n    node.warn(`Could not determine closest triangle for location from ${person_id}. No message sent.`);\n    return null; // Stop if no closest triangle found\n}\n\n\n// --- Helper function for Haversine distance calculation ---\nfunction calculateHaversine(lat1, lon1, lat2, lon2) {\n    function toRad(x) {\n        return x * Math.PI / 180;\n    }\n\n    const R = 6371; // Earth radius in km\n    const dLat = toRad(lat2 - lat1);\n    const dLon = toRad(lon2 - lon1);\n    lat1 = toRad(lat1);\n    lat2 = toRad(lat2);\n\n    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +\n        Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);\n    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));\n    return R * c; // Distance in km\n}",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 590,
+        "y": 320,
+        "wires": [
+            [
+                "747ae2c1b273b305",
+                "63974df8bf787fef"
+            ]
+        ]
+    },
+    {
+        "id": "747ae2c1b273b305",
+        "type": "debug",
+        "z": "23cfe505ff3afdc7",
+        "name": "Output Closest",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 820,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "c8b22666cbb5a0ce",
+        "type": "mqtt in",
+        "z": "23cfe505ff3afdc7",
+        "name": "Mum's location",
+        "topic": "owntracks/mum/Mum",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "d9907598e0a47dc3",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 140,
+        "y": 320,
+        "wires": [
+            [
+                "3c456c76837ab3d3"
+            ]
+        ]
+    },
+    {
+        "id": "77ba3a9eddf185e6",
+        "type": "mqtt in",
+        "z": "23cfe505ff3afdc7",
+        "name": "Son's location",
+        "topic": "owntracks/son/Son",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "d9907598e0a47dc3",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 130,
+        "y": 400,
+        "wires": [
+            [
+                "f37140d981885bf0"
+            ]
+        ]
+    },
+    {
+        "id": "3c456c76837ab3d3",
+        "type": "delay",
+        "z": "23cfe505ff3afdc7",
+        "name": "",
+        "pauseType": "rate",
+        "timeout": "60",
+        "timeoutUnits": "seconds",
+        "rate": "1",
+        "nbRateUnits": "1",
+        "rateUnits": "minute",
+        "randomFirst": "1",
+        "randomLast": "5",
+        "randomUnits": "seconds",
+        "drop": true,
+        "allowrate": false,
+        "outputs": 1,
+        "x": 350,
+        "y": 320,
+        "wires": [
+            [
+                "8f3cbe1a69d2fd63"
+            ]
+        ]
+    },
+    {
+        "id": "f37140d981885bf0",
+        "type": "delay",
+        "z": "23cfe505ff3afdc7",
+        "name": "",
+        "pauseType": "rate",
+        "timeout": "60",
+        "timeoutUnits": "seconds",
+        "rate": "1",
+        "nbRateUnits": "1",
+        "rateUnits": "minute",
+        "randomFirst": "1",
+        "randomLast": "5",
+        "randomUnits": "seconds",
+        "drop": true,
+        "allowrate": false,
+        "outputs": 1,
+        "x": 350,
+        "y": 400,
+        "wires": [
+            [
+                "8f3cbe1a69d2fd63"
+            ]
+        ]
+    },
+    {
+        "id": "971d50ef5fbd0d95",
+        "type": "inject",
+        "z": "23cfe505ff3afdc7",
+        "name": "Load Triangle Data",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "/home/russell/.node-red/data/triangles.json",
+        "payloadType": "str",
+        "x": 130,
+        "y": 160,
+        "wires": [
+            [
+                "c143e8c54103a5bc"
+            ]
+        ]
+    },
+    {
+        "id": "c143e8c54103a5bc",
+        "type": "file in",
+        "z": "23cfe505ff3afdc7",
+        "name": "",
+        "filename": "payload",
+        "filenameType": "msg",
+        "format": "utf8",
+        "chunk": false,
+        "sendError": false,
+        "encoding": "none",
+        "allProps": false,
+        "x": 380,
+        "y": 160,
+        "wires": [
+            [
+                "b3ca37f00e8b71ed"
+            ]
+        ]
+    },
+    {
+        "id": "b3ca37f00e8b71ed",
+        "type": "json",
+        "z": "23cfe505ff3afdc7",
+        "name": "Parse JSON",
+        "property": "payload",
+        "action": "obj",
+        "pretty": false,
+        "x": 550,
+        "y": 160,
+        "wires": [
+            [
+                "d7ac01cb2a51b76d"
+            ]
+        ]
+    },
+    {
+        "id": "d7ac01cb2a51b76d",
+        "type": "change",
+        "z": "23cfe505ff3afdc7",
+        "name": "Store Flow Context",
+        "rules": [
+            {
+                "t": "set",
+                "p": "triangleData",
+                "pt": "flow",
+                "to": "payload",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 770,
+        "y": 160,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "63974df8bf787fef",
+        "type": "mqtt out",
+        "z": "23cfe505ff3afdc7",
+        "name": "To Pico Commands",
+        "topic": "pico/leds/command",
+        "qos": "0",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "d9907598e0a47dc3",
+        "x": 830,
+        "y": 400,
+        "wires": []
     },
     {
         "id": "d9907598e0a47dc3",
@@ -37,196 +313,5 @@
         "willMsg": {},
         "userProps": "",
         "sessionExpiry": ""
-    },
-    {
-        "id": "d44f56d2e55419d9",
-        "type": "mqtt in",
-        "z": "23cfe505ff3afdc7",
-        "name": "Dad's location",
-        "topic": "owntracks/dad/Dad",
-        "qos": "2",
-        "datatype": "auto-detect",
-        "broker": "d9907598e0a47dc3",
-        "nl": false,
-        "rap": true,
-        "rh": 0,
-        "inputs": 0,
-        "x": 170,
-        "y": 220,
-        "wires": [
-            [
-                "ec033dccfcf7d510"
-            ]
-        ]
-    },
-    {
-        "id": "ec033dccfcf7d510",
-        "type": "delay",
-        "z": "23cfe505ff3afdc7",
-        "name": "",
-        "pauseType": "rate",
-        "timeout": "60",
-        "timeoutUnits": "seconds",
-        "rate": "1",
-        "nbRateUnits": "1",
-        "rateUnits": "minute",
-        "randomFirst": "1",
-        "randomLast": "5",
-        "randomUnits": "seconds",
-        "drop": false,
-        "allowrate": false,
-        "outputs": 1,
-        "x": 350,
-        "y": 220,
-        "wires": [
-            [
-                "ded6623be94fab24",
-                "8f3cbe1a69d2fd63"
-            ]
-        ]
-    },
-    {
-        "id": "ded6623be94fab24",
-        "type": "debug",
-        "z": "23cfe505ff3afdc7",
-        "name": "Dad's Location Debug",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 560,
-        "y": 220,
-        "wires": []
-    },
-    {
-        "id": "971d50ef5fbd0d95",
-        "type": "inject",
-        "z": "23cfe505ff3afdc7",
-        "name": "Load Triangle Data",
-        "props": [
-            {
-                "p": "payload"
-            },
-            {
-                "p": "topic",
-                "vt": "str"
-            }
-        ],
-        "repeat": "",
-        "crontab": "",
-        "once": true,
-        "onceDelay": 0.1,
-        "topic": "",
-        "payload": "/home/russell/.node-red/data/triangles.json",
-        "payloadType": "str",
-        "x": 210,
-        "y": 160,
-        "wires": [
-            [
-                "c143e8c54103a5bc"
-            ]
-        ]
-    },
-    {
-        "id": "c143e8c54103a5bc",
-        "type": "file in",
-        "z": "23cfe505ff3afdc7",
-        "name": "",
-        "filename": "payload",
-        "filenameType": "msg",
-        "format": "utf8",
-        "chunk": false,
-        "sendError": false,
-        "encoding": "none",
-        "allProps": false,
-        "x": 420,
-        "y": 160,
-        "wires": [
-            [
-                "b3ca37f00e8b71ed"
-            ]
-        ]
-    },
-    {
-        "id": "b3ca37f00e8b71ed",
-        "type": "json",
-        "z": "23cfe505ff3afdc7",
-        "name": "Parse JSON",
-        "property": "payload",
-        "action": "obj",
-        "pretty": false,
-        "x": 630,
-        "y": 160,
-        "wires": [
-            [
-                "d7ac01cb2a51b76d"
-            ]
-        ]
-    },
-    {
-        "id": "d7ac01cb2a51b76d",
-        "type": "change",
-        "z": "23cfe505ff3afdc7",
-        "name": "Store Flow Context",
-        "rules": [
-            {
-                "t": "set",
-                "p": "triangleData",
-                "pt": "flow",
-                "to": "payload",
-                "tot": "msg"
-            }
-        ],
-        "action": "",
-        "property": "",
-        "from": "",
-        "to": "",
-        "reg": false,
-        "x": 850,
-        "y": 160,
-        "wires": [
-            []
-        ]
-    },
-    {
-        "id": "8f3cbe1a69d2fd63",
-        "type": "function",
-        "z": "23cfe505ff3afdc7",
-        "name": "Calculate Closest Triangle",
-        "func": "// Get the triangle data stored in flow context\nconst triangleData = flow.get(\"triangleData\");\n\n// --- Basic Checks ---\n// Check if triangle data has been loaded\nif (!triangleData) {\n    node.error(\"Triangle data (flow.triangleData) not found. Cannot calculate.\", msg);\n    return null; // Stop processing this message\n}\n\n// Check if payload exists and has lat/lon (OwnTracks format)\n// NOTE: OwnTracks messages might have different '_type'. We only want 'location'.\nif (!msg.payload || msg.payload._type !== 'location' || typeof msg.payload.lat === 'undefined' || typeof msg.payload.lon === 'undefined') {\n    // Log if it's not a location update we can use, then stop\n    // node.warn(\"Received non-location message or missing lat/lon.\", msg);\n    return null; // Stop processing this message\n}\n\n// --- Get Data ---\nconst incomingLat = msg.payload.lat;\nconst incomingLon = msg.payload.lon;\n// Optional: Get user/device info if needed later\n// const topicParts = msg.topic.split('/'); // e.g., [\"owntracks\", \"user\", \"device\"]\n// const user = topicParts[1];\n// const device = topicParts[2];\n\nnode.log(`Processing location for ${msg.topic}: Lat ${incomingLat}, Lon ${incomingLon}`);\n\nlet closestTriangle = null;\nlet minDistance = Infinity;\n\n// --- Main Calculation Loop ---\ntriangleData.forEach(triangle => {\n    // --- Important: Adapt the next two lines if your JSON structure is different ---\n    // This code assumes each 'triangle' object in your JSON file\n    // has a 'center' object within it, which contains 'lat' and 'lon'.\n    // Example: { \"name\": \"T1\", \"center\": { \"lat\": 51.7, \"lon\": -1.8 }, \"leds\": [0, 1] }\n    let centerLat = triangle.centre[0]; // Get latitude from index 0 of the 'centre' array\n    let centerLon = triangle.centre[1]; // Get longitude from index 1 of the 'centre' array\n    // If your structure is different (e.g., \"center_latitude\"), change the lines above accordingly.\n\n    // Check if center coordinates are valid numbers before calculating\n    if (typeof centerLat === 'number' && typeof centerLon === 'number') {\n        // Calculate distance from phone's location to this triangle's center\n        let distance = calculateHaversine(incomingLat, incomingLon, centerLat, centerLon);\n\n        // If this distance is smaller than the smallest found so far...\n        if (distance < minDistance) {\n            // ...update the minimum distance and remember this triangle\n            minDistance = distance;\n            closestTriangle = triangle; // Store the whole triangle object for later use\n        }\n    } else {\n        // Log a warning if a triangle in your data has bad coordinates\n        node.warn(`Invalid or missing center coordinates for triangle: ${triangle.name || 'Unnamed'}`);\n    }\n});\n// -----------------------------\n\n\n// --- Prepare Output (Placeholder) ---\n// Once closestTriangle is found, we'll format msg.payload for the Pico\n// Example: msg.payload = { leds: closestTriangle.leds };\n\n\n// Check if we found a closest triangle before sending message\nif (closestTriangle) {\n    // Example: Format payload for Pico\n    // msg.payload = { command: \"light\", leds: closestTriangle.leds }; // Adjust as needed\n    node.log(`Closest triangle found: ${closestTriangle.name}`); // Log which one we found\n    msg.payload = closestTriangle;\n    // return msg; // Return the message to send to the Pico (Currently commented out)\n    return msg; // Temporary: Don't send anything yet\n} else {\n    node.warn(\"Could not determine closest triangle for received location.\", msg);\n    return null; // Stop if no closest triangle found\n}\n\n\n// --- Helper function for Haversine distance calculation ---\nfunction calculateHaversine(lat1, lon1, lat2, lon2) {\n    function toRad(x) {\n        return x * Math.PI / 180;\n    }\n\n    const R = 6371; // Earth radius in km\n    const dLat = toRad(lat2 - lat1);\n    const dLon = toRad(lon2 - lon1);\n    lat1 = toRad(lat1);\n    lat2 = toRad(lat2);\n\n    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +\n        Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);\n    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));\n    return R * c; // Distance in km\n}",
-        "outputs": 1,
-        "timeout": 0,
-        "noerr": 7,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 430,
-        "y": 320,
-        "wires": [
-            [
-                "747ae2c1b273b305"
-            ]
-        ]
-    },
-    {
-        "id": "747ae2c1b273b305",
-        "type": "debug",
-        "z": "23cfe505ff3afdc7",
-        "name": "Output Closest",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "payload",
-        "targetType": "msg",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 720,
-        "y": 320,
-        "wires": []
     }
 ]
