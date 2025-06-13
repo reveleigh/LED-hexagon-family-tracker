@@ -1,0 +1,8 @@
+{
+  "name": "node-red-project",
+  "description": "initially created for you by Node-RED 4.0.9",
+  "version": "0.0.1",
+  "private": true,
+  "dependencies": {
+  }
+}
